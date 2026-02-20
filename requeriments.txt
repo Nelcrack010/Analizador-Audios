@@ -1,0 +1,4 @@
+flask
+openai-whisper
+setuptools-rust
+gunicorn
