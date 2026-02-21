@@ -5,8 +5,11 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
-# Render leerá la clave desde las Variables de Entorno que configuraste
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# 1. Apuntamos el cliente a los servidores de Groq en lugar de OpenAI
+client = OpenAI(
+    api_key=os.environ.get("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -37,10 +40,10 @@ def analizar_multiples():
         archivo.save(ruta_archivo)
         
         try:
-            # Llamada a la API de OpenAI para transcripción rápida
+            # 2. Usamos el modelo whisper-large-v3 gratuito de Groq
             with open(ruta_archivo, "rb") as audio_file:
                 transcription = client.audio.transcriptions.create(
-                    model="whisper-1", 
+                    model="whisper-large-v3", 
                     file=audio_file,
                     language="es"
                 )
@@ -63,7 +66,7 @@ def analizar_multiples():
     # Cálculo de porcentajes
     total_menciones = sum(conteo_acumulado.values())
     porcentajes = {cat: (round((val / total_menciones) * 100, 2) if total_menciones > 0 else 0) 
-                for cat, val in conteo_acumulado.items()}
+                  for cat, val in conteo_acumulado.items()}
 
     return jsonify({
         "transcripciones": "\n\n".join(transcripciones_totales),
