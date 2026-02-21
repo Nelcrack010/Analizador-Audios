@@ -1,31 +1,23 @@
 import os
 import re
-import whisper
 from flask import Flask, render_template, request, jsonify
+from openai import OpenAI
 
 app = Flask(__name__)
-model = whisper.load_model("base")
+
+# Render leerá la clave desde las Variables de Entorno que configuraste
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Categorías para tu estudio de mercado
 MARKET_KEYWORDS = {
     "Precio": ["precio", "costo", "caro", "barato", "oferta", "pago", "dinero"],
-    "Calidad": ["calidad", "bueno", "malo", "excelente", "falla", "duración", "material"],
-    "Servicio": ["atención", "servicio", "soporte", "ayuda", "rápido", "lento", "amabilidad"],
-    "Competencia": ["competencia", "otros", "marca", "diferente", "mejor", "peor"]
+    "Calidad": ["calidad", "bueno", "malo", "excelente", "falla", "material"],
+    "Servicio": ["atención", "servicio", "soporte", "ayuda", "rápido", "lento"],
+    "Competencia": ["competencia", "otros", "marca", "diferente", "mejor"]
 }
-
-def analizar_texto(texto):
-    texto_limpio = re.sub(r'[^\w\s]', '', texto.lower())
-    resultados = {}
-    for categoria, sinonimos in MARKET_KEYWORDS.items():
-        conteo = 0
-        for palabra in sinonimos:
-            patron = r'\b' + re.escape(palabra) + r'\b'
-            conteo += len(re.findall(patron, texto_limpio))
-        resultados[categoria] = conteo
-    return resultados
 
 @app.route('/')
 def index():
@@ -33,7 +25,6 @@ def index():
 
 @app.route('/analizar', methods=['POST'])
 def analizar_multiples():
-    # Recibir múltiples archivos bajo la misma llave 'audios'
     archivos = request.files.getlist('audios')
     if not archivos or archivos[0].filename == '':
         return jsonify({"error": "No seleccionaste archivos"}), 400
@@ -46,25 +37,33 @@ def analizar_multiples():
         archivo.save(ruta_archivo)
         
         try:
-            result = model.transcribe(ruta_archivo, language="es")
-            texto_final = result['text']
+            # Llamada a la API de OpenAI para transcripción rápida
+            with open(ruta_archivo, "rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    model="whisper-1", 
+                    file=audio_file,
+                    language="es"
+                )
+            
+            texto_final = transcription.text
             transcripciones_totales.append(f"--- {archivo.filename} ---\n{texto_final}")
             
-            # Analizar y sumar al acumulado
-            analisis_archivo = analizar_texto(texto_final)
-            for cat in conteo_acumulado:
-                conteo_acumulado[cat] += analisis_archivo[cat]
+            # Análisis de texto
+            texto_limpio = re.sub(r'[^\w\s]', '', texto_final.lower())
+            for categoria, sinonimos in MARKET_KEYWORDS.items():
+                for palabra in sinonimos:
+                    patron = r'\b' + re.escape(palabra) + r'\b'
+                    conteo_acumulado[categoria] += len(re.findall(patron, texto_limpio))
+        except Exception as e:
+            return jsonify({"error": f"Error procesando {archivo.filename}: {str(e)}"}), 500
         finally:
             if os.path.exists(ruta_archivo):
                 os.remove(ruta_archivo)
 
-    # Calcular porcentajes
+    # Cálculo de porcentajes
     total_menciones = sum(conteo_acumulado.values())
-    porcentajes = {}
-    if total_menciones > 0:
-        porcentajes = {cat: round((val / total_menciones) * 100, 2) for cat, val in conteo_acumulado.items()}
-    else:
-        porcentajes = {cat: 0 for cat in conteo_acumulado.keys()}
+    porcentajes = {cat: (round((val / total_menciones) * 100, 2) if total_menciones > 0 else 0) 
+                for cat, val in conteo_acumulado.items()}
 
     return jsonify({
         "transcripciones": "\n\n".join(transcripciones_totales),

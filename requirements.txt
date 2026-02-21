@@ -1,4 +1,3 @@
 flask
-openai-whisper
-setuptools-rust
+openai
 gunicorn
