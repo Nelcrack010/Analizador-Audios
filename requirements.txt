@@ -1,3 +1,6 @@
 flask
 openai
 gunicorn
+pandas
+openpyxl
+python-docx

@@ -2,59 +2,95 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Analizador Masivo | Estudio de Mercado</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEXUM | Analizador Pro de Mercado</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #f4f7f6; padding: 20px; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-        .upload-area { border: 3px dashed #28a745; padding: 30px; text-align: center; cursor: pointer; margin-bottom: 20px; }
-        .btn { background: #28a745; color: white; border: none; padding: 12px 30px; border-radius: 5px; cursor: pointer; font-size: 1.1em; }
-        #loading { color: #d9534f; font-weight: bold; display: none; margin: 10px 0; }
+        :root { --primary-color: #2c3e50; --secondary-color: #3498db; --accent-color: #e74c3c; --bg-light: #f8f9fa; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg-light); color: var(--primary-color); margin: 0; padding: 20px; line-height: 1.6; }
+        .container { max-width: 1100px; margin: 0 auto; background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); }
         
-        /* Estilos nuevos para el resumen */
-        .summary-box { background: #eef2f5; border-left: 5px solid #007bff; padding: 20px; border-radius: 8px; margin-bottom: 20px; font-size: 1.1em; white-space: pre-wrap; line-height: 1.6; }
+        h1 { color: var(--primary-color); text-align: center; font-weight: 700; margin-bottom: 10px; }
+        .subtitle { text-align: center; color: #7f8c8d; margin-bottom: 30px; }
         
-        .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 10px; }
-        textarea { width: 100%; height: 300px; border-radius: 8px; border: 1px solid #ddd; padding: 10px; font-family: monospace; }
-        canvas { background: #fff; padding: 10px; border-radius: 8px; }
+        .upload-section { border: 2px dashed var(--secondary-color); background: #f0f7fb; padding: 40px; border-radius: 10px; text-align: center; transition: all 0.3s; cursor: pointer; }
+        .upload-section:hover { background: #e1f0f8; border-color: #2980b9; }
+        .btn-main { background: var(--secondary-color); color: white; border: none; padding: 15px 40px; border-radius: 30px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: background 0.3s; display: inline-flex; align-items: center; gap: 10px; margin-top: 20px;}
+        .btn-main:hover { background: #2980b9; }
+        
+        #loading { display: none; text-align: center; margin: 30px 0; color: var(--secondary-color); font-weight: 600; }
+        
+        /* Estilos del Reporte */
+        .report-container { display: none; margin-top: 40px; border-top: 1px solid #eee; padding-top: 30px; }
+        .summary-box { background: #fff; border-left: 5px solid var(--secondary-color); padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); white-space: pre-wrap; }
+        .summary-box h2 { margin-top: 0; color: var(--secondary-color); }
+        
+        .chart-container { position: relative; height: 400px; width: 100%; max-width: 600px; margin: 40px auto; }
+        
+        /* Botones de Descarga */
+        .actions-panel { margin-top: 40px; text-align: center; padding: 30px; background: var(--bg-light); border-radius: 10px; }
+        .btn-download { padding: 12px 25px; border-radius: 8px; border: none; color: white; font-weight: 600; cursor: pointer; margin: 5px; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.2s; }
+        .btn-download:hover { transform: translateY(-2px); }
+        .btn-word { background-color: #2b579a; } /* Color Word */
+        .btn-excel { background-color: #217346; } /* Color Excel */
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📊 Analizador de Feedback y Datos Extraídos</h1>
-        <p>Sube tus audios. La IA extraerá los datos duros (costos, cantidades) y graficará las tendencias.</p>
+        <h1><i class="fa-solid fa-chart-simple"></i> NEXUM Analytics Pro</h1>
+        <p class="subtitle">Inteligencia Artificial aplicada al análisis de estudios de mercado.</p>
 
-        <div class="upload-area">
-            <input type="file" id="audioFiles" accept="audio/*" multiple>
-            <br><br>
-            <button class="btn" onclick="subirArchivos()">Procesar Audios</button>
+        <div class="upload-section" onclick="document.getElementById('audioFiles').click()">
+            <i class="fa-solid fa-cloud-arrow-up fa-3x" style="color: var(--secondary-color);"></i>
+            <h3>Sube tus entrevistas o grabaciones</h3>
+            <p>Arrastra archivos aquí o haz clic para navegar. Procesamiento por lotes soportado.</p>
+            <input type="file" id="audioFiles" accept="audio/*" multiple style="display:none">
+        </div>
+        <div style="text-align: center;">
+            <button class="btn-main" onclick="procesarAudios()">
+                <i class="fa-solid fa-bolt"></i> Iniciar Análisis IA
+            </button>
         </div>
 
-        <div id="loading">⏳ IA Escuchando y Extrayendo Datos... Esto tomará unos segundos.</div>
+        <div id="loading">
+            <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><br>
+            <p>Procesando audio con Whisper y generando reporte con Llama 3... Por favor espere.</p>
+        </div>
 
-        <div id="resultado" style="display:none;">
-            <h3>🤖 Resumen Ejecutivo Extraído:</h3>
-            <div id="resumenIA" class="summary-box"></div>
+        <div id="resultado" class="report-container">
+            <div class="summary-box">
+                <h2><i class="fa-solid fa-file-contract"></i> Resumen Ejecutivo del Análisis</h2>
+                <div id="resumenTexto"></div>
+            </div>
 
-            <div class="results-grid">
-                <div>
-                    <h3>Transcripciones Crudas:</h3>
-                    <textarea id="textoCompleto" readonly></textarea>
-                </div>
-                <div>
-                    <h3>Distribución de Temas (%)</h3>
-                    <canvas id="graficaPorcentaje"></canvas>
-                </div>
+            <div class="chart-container">
+                <canvas id="miGrafica"></canvas>
+            </div>
+
+            <div class="actions-panel">
+                <h3><i class="fa-solid fa-download"></i> Descargar Reporte Profesional</h3>
+                <p>Obtén los resultados en formatos editables para tus presentaciones.</p>
+                <a id="btnWord" href="#" class="btn-download btn-word">
+                    <i class="fa-solid fa-file-word"></i> Descargar Informe Word (.docx)
+                </a>
+                <a id="btnExcel" href="#" class="btn-download btn-excel">
+                    <i class="fa-solid fa-file-excel"></i> Descargar Datos Excel (.xlsx)
+                </a>
             </div>
         </div>
     </div>
 
     <script>
+        // Registrar el plugin de DataLabels
+        Chart.register(ChartDataLabels);
         let myChart = null;
+        let currentAnalysisId = null;
 
-        async function subirArchivos() {
+        async function procesarAudios() {
             const input = document.getElementById('audioFiles');
-            if (input.files.length === 0) return alert("Selecciona al menos un archivo.");
+            if (input.files.length === 0) return alert("Por favor, selecciona al menos un archivo de audio.");
 
             const formData = new FormData();
             for (let i = 0; i < input.files.length; i++) {
@@ -68,48 +104,81 @@
                 const response = await fetch('/analizar', { method: 'POST', body: formData });
                 const data = await response.json();
 
-                if (data.error) {
-                    alert(data.error);
-                    document.getElementById('loading').style.display = 'none';
-                    return;
-                }
+                if (data.error) throw new Error(data.error);
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('resultado').style.display = 'block';
                 
-                // Mostrar los datos en la interfaz
-                document.getElementById('textoCompleto').value = data.transcripciones;
-                document.getElementById('resumenIA').innerText = data.resumen; // Inserta el texto extraído por Llama 3
+                // Mostrar Resumen
+                document.getElementById('resumenTexto').innerText = data.resumen;
+                
+                // Actualizar enlaces de descarga con el ID único
+                currentAnalysisId = data.analysis_id;
+                document.getElementById('btnWord').href = `/download/word/${currentAnalysisId}`;
+                document.getElementById('btnExcel').href = `/download/excel/${currentAnalysisId}`;
 
-                renderizarGrafica(data.porcentajes);
+                renderizarGraficaPro(data.porcentajes);
+
             } catch (e) {
-                alert("Error en el servidor al procesar la solicitud.");
+                alert("Error: " + e.message);
                 document.getElementById('loading').style.display = 'none';
             }
         }
 
-        function renderizarGrafica(porcentajes) {
-            const ctx = document.getElementById('graficaPorcentaje').getContext('2d');
+        function renderizarGraficaPro(datos) {
+            const ctx = document.getElementById('miGrafica').getContext('2d');
             if (myChart) myChart.destroy();
 
+            const valores = Object.values(datos);
+            const etiquetas = Object.keys(datos);
+
             myChart = new Chart(ctx, {
-                type: 'doughnut',
+                type: 'pie', // Gráfico circular tipo pastel
                 data: {
-                    labels: Object.keys(porcentajes),
+                    labels: etiquetas,
                     datasets: [{
-                        data: Object.values(porcentajes),
-                        backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0'],
-                        hoverOffset: 4
+                        data: valores,
+                        backgroundColor: [
+                            '#3498db', // Azul
+                            '#2ecc71', // Verde
+                            '#e74c3c', // Rojo
+                            '#9b59b6'  // Morado
+                        ],
+                        borderWidth: 2,
+                        borderColor: '#ffffff'
                     }]
                 },
                 options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: {
+                        padding: 20
+                    },
                     plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { font: { size: 14 }, padding: 20 }
+                        },
                         tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.label + ': ' + context.raw + '%';
-                                }
-                            }
+                            enabled: false // Desactivamos tooltips porque usaremos etiquetas
+                        },
+                        // --- CONFIGURACIÓN DEL PLUGIN DE PORCENTAJES ---
+                        datalabels: {
+                            color: '#ffffff',
+                            font: {
+                                weight: 'bold',
+                                size: 16
+                            },
+                            formatter: (value, ctx) => {
+                                // Muestra el valor seguido de "%" si es mayor a 0
+                                return value > 0 ? value + '%' : '';
+                            },
+                            backgroundColor: (context) => {
+                                // Un fondo semitransparente del mismo color de la rebanada
+                                return context.dataset.backgroundColor[context.dataIndex] + 'CC';
+                            },
+                            borderRadius: 4,
+                            padding: 6
                         }
                     }
                 }
