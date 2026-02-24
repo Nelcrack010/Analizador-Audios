@@ -17,24 +17,31 @@
         
         .upload-section { border: 2px dashed var(--secondary-color); background: #f0f7fb; padding: 40px; border-radius: 10px; text-align: center; transition: all 0.3s; cursor: pointer; }
         .upload-section:hover { background: #e1f0f8; border-color: #2980b9; }
-        .btn-main { background: var(--secondary-color); color: white; border: none; padding: 15px 40px; border-radius: 30px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: background 0.3s; display: inline-flex; align-items: center; gap: 10px; margin-top: 20px;}
+        
+        /* --- ESTILOS NUEVOS PARA LA LISTA DE ARCHIVOS --- */
+        .file-list { list-style: none; padding: 0; margin-top: 20px; text-align: left; max-height: 250px; overflow-y: auto; }
+        .file-list li { background: #fff; padding: 12px 20px; margin-bottom: 8px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid var(--secondary-color); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .file-name { font-weight: 500; color: #333; }
+        .delete-btn { color: var(--accent-color); cursor: pointer; border: none; background: none; font-size: 1.1rem; transition: color 0.3s; padding: 5px 10px; }
+        .delete-btn:hover { color: #c0392b; }
+        /* ------------------------------------------------ */
+
+        .btn-main { background: var(--secondary-color); color: white; border: none; padding: 15px 40px; border-radius: 30px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: background 0.3s; display: inline-flex; align-items: center; gap: 10px; margin-top: 20px; width: 100%; justify-content: center;}
         .btn-main:hover { background: #2980b9; }
         
         #loading { display: none; text-align: center; margin: 30px 0; color: var(--secondary-color); font-weight: 600; }
         
-        /* Estilos del Reporte */
         .report-container { display: none; margin-top: 40px; border-top: 1px solid #eee; padding-top: 30px; }
         .summary-box { background: #fff; border-left: 5px solid var(--secondary-color); padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); white-space: pre-wrap; }
         .summary-box h2 { margin-top: 0; color: var(--secondary-color); }
         
         .chart-container { position: relative; height: 400px; width: 100%; max-width: 600px; margin: 40px auto; }
         
-        /* Botones de Descarga */
         .actions-panel { margin-top: 40px; text-align: center; padding: 30px; background: var(--bg-light); border-radius: 10px; }
-        .btn-download { padding: 12px 25px; border-radius: 8px; border: none; color: white; font-weight: 600; cursor: pointer; margin: 5px; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.2s; }
+        .btn-download { padding: 12px 25px; border-radius: 8px; border: none; color: white; font-weight: 600; cursor: pointer; margin: 5px; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; transition: transform 0.2s; }
         .btn-download:hover { transform: translateY(-2px); }
-        .btn-word { background-color: #2b579a; } /* Color Word */
-        .btn-excel { background-color: #217346; } /* Color Excel */
+        .btn-word { background-color: #2b579a; }
+        .btn-excel { background-color: #217346; }
     </style>
 </head>
 <body>
@@ -44,19 +51,20 @@
 
         <div class="upload-section" onclick="document.getElementById('audioFiles').click()">
             <i class="fa-solid fa-cloud-arrow-up fa-3x" style="color: var(--secondary-color);"></i>
-            <h3>Sube tus entrevistas o grabaciones</h3>
-            <p>Arrastra archivos aquí o haz clic para navegar. Procesamiento por lotes soportado.</p>
+            <h3>Haz clic para seleccionar tus audios</h3>
+            <p>Puedes subir varios archivos a la vez.</p>
             <input type="file" id="audioFiles" accept="audio/*" multiple style="display:none">
         </div>
-        <div style="text-align: center;">
-            <button class="btn-main" onclick="procesarAudios()">
-                <i class="fa-solid fa-bolt"></i> Iniciar Análisis IA
-            </button>
-        </div>
+
+        <ul id="fileListUI" class="file-list"></ul>
+
+        <button class="btn-main" onclick="procesarAudios()">
+            <i class="fa-solid fa-bolt"></i> Iniciar Análisis IA
+        </button>
 
         <div id="loading">
             <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><br>
-            <p>Procesando audio con Whisper y generando reporte con Llama 3... Por favor espere.</p>
+            <p>Procesando audio y extrayendo datos... Por favor espere.</p>
         </div>
 
         <div id="resultado" class="report-container">
@@ -71,7 +79,6 @@
 
             <div class="actions-panel">
                 <h3><i class="fa-solid fa-download"></i> Descargar Reporte Profesional</h3>
-                <p>Obtén los resultados en formatos editables para tus presentaciones.</p>
                 <a id="btnWord" href="#" class="btn-download btn-word">
                     <i class="fa-solid fa-file-word"></i> Descargar Informe Word (.docx)
                 </a>
@@ -83,19 +90,57 @@
     </div>
 
     <script>
-        // Registrar el plugin de DataLabels
         Chart.register(ChartDataLabels);
         let myChart = null;
         let currentAnalysisId = null;
+        
+        // Array global para guardar los archivos que el usuario va eligiendo
+        let archivosSeleccionados = []; 
+
+        const fileInput = document.getElementById('audioFiles');
+        const fileListUI = document.getElementById('fileListUI');
+
+        // Escuchar cada vez que el usuario elige archivos en la ventana de Windows/Mac
+        fileInput.addEventListener('change', (evento) => {
+            const nuevosArchivos = Array.from(evento.target.files);
+            // Agregarlos a nuestra lista interna
+            archivosSeleccionados = archivosSeleccionados.concat(nuevosArchivos);
+            // Actualizar la interfaz visual
+            renderizarListaArchivos();
+            // Limpiar el input para que permita volver a seleccionar el mismo archivo si se borró
+            fileInput.value = ''; 
+        });
+
+        // Función para dibujar la lista con el botón de borrar
+        function renderizarListaArchivos() {
+            fileListUI.innerHTML = ''; // Limpiar lo anterior
+            
+            archivosSeleccionados.forEach((archivo, index) => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <span class="file-name"><i class="fa-solid fa-file-audio" style="color: var(--secondary-color); margin-right: 10px;"></i> ${archivo.name}</span>
+                    <button class="delete-btn" onclick="eliminarArchivo(${index})" title="Quitar archivo">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                `;
+                fileListUI.appendChild(li);
+            });
+        }
+
+        // Función para eliminar un archivo específico
+        function eliminarArchivo(index) {
+            archivosSeleccionados.splice(index, 1); // Quitar del array
+            renderizarListaArchivos(); // Volver a dibujar
+        }
 
         async function procesarAudios() {
-            const input = document.getElementById('audioFiles');
-            if (input.files.length === 0) return alert("Por favor, selecciona al menos un archivo de audio.");
+            // Validar usando nuestro array interno, no el input
+            if (archivosSeleccionados.length === 0) return alert("Por favor, selecciona al menos un archivo de audio.");
 
             const formData = new FormData();
-            for (let i = 0; i < input.files.length; i++) {
-                formData.append('audios', input.files[i]);
-            }
+            archivosSeleccionados.forEach(file => {
+                formData.append('audios', file);
+            });
 
             document.getElementById('loading').style.display = 'block';
             document.getElementById('resultado').style.display = 'none';
@@ -109,10 +154,8 @@
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('resultado').style.display = 'block';
                 
-                // Mostrar Resumen
                 document.getElementById('resumenTexto').innerText = data.resumen;
                 
-                // Actualizar enlaces de descarga con el ID único
                 currentAnalysisId = data.analysis_id;
                 document.getElementById('btnWord').href = `/download/word/${currentAnalysisId}`;
                 document.getElementById('btnExcel').href = `/download/excel/${currentAnalysisId}`;
@@ -133,17 +176,12 @@
             const etiquetas = Object.keys(datos);
 
             myChart = new Chart(ctx, {
-                type: 'pie', // Gráfico circular tipo pastel
+                type: 'pie',
                 data: {
                     labels: etiquetas,
                     datasets: [{
                         data: valores,
-                        backgroundColor: [
-                            '#3498db', // Azul
-                            '#2ecc71', // Verde
-                            '#e74c3c', // Rojo
-                            '#9b59b6'  // Morado
-                        ],
+                        backgroundColor: ['#3498db', '#2ecc71', '#e74c3c', '#9b59b6'],
                         borderWidth: 2,
                         borderColor: '#ffffff'
                     }]
@@ -151,32 +189,15 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    layout: {
-                        padding: 20
-                    },
+                    layout: { padding: 20 },
                     plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: { font: { size: 14 }, padding: 20 }
-                        },
-                        tooltip: {
-                            enabled: false // Desactivamos tooltips porque usaremos etiquetas
-                        },
-                        // --- CONFIGURACIÓN DEL PLUGIN DE PORCENTAJES ---
+                        legend: { position: 'bottom', labels: { font: { size: 14 }, padding: 20 } },
+                        tooltip: { enabled: false },
                         datalabels: {
                             color: '#ffffff',
-                            font: {
-                                weight: 'bold',
-                                size: 16
-                            },
-                            formatter: (value, ctx) => {
-                                // Muestra el valor seguido de "%" si es mayor a 0
-                                return value > 0 ? value + '%' : '';
-                            },
-                            backgroundColor: (context) => {
-                                // Un fondo semitransparente del mismo color de la rebanada
-                                return context.dataset.backgroundColor[context.dataIndex] + 'CC';
-                            },
+                            font: { weight: 'bold', size: 16 },
+                            formatter: (value) => value > 0 ? value + '%' : '',
+                            backgroundColor: (context) => context.dataset.backgroundColor[context.dataIndex] + 'CC',
                             borderRadius: 4,
                             padding: 6
                         }
