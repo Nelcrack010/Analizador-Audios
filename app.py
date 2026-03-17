@@ -34,25 +34,36 @@ def generar_resumen_ia(texto):
     if not texto.strip():
         return "No hay texto suficiente para generar un resumen."
     
+    # --- DEFENSA CONTRA LÍMITES DE LA API GRATUITA ---
+    # Un token son aprox 4 caracteres. 6000 tokens = ~24,000 caracteres.
+    # Cortamos a 18,000 caracteres para dejar espacio seguro para la respuesta de la IA.
+    limite_caracteres = 18000
+    texto_seguro = texto[:limite_caracteres]
+    
+    aviso_limite = ""
+    if len(texto) > limite_caracteres:
+         aviso_limite = "\n\n⚠️ NOTA DE HELIOS: Debido a la longitud extrema de la reunión y a los límites de la capa gratuita de IA, este resumen ejecutivo se generó analizando únicamente la primera parte de la conversación. Sin embargo, tus archivos descargables contienen la transcripción completa."
+    
     prompt = f"""
     Actúa como un consultor de negocios senior. Analiza la siguiente transcripción de audios de un estudio de mercado.
     
     Tu tarea es generar un RESUMEN EJECUTIVO PROFESIONAL.
-    1.  **Extrae Datos Duros:** Identifica y lista cualquier cifra mencionada: precios específicos (ej. "$50"), cantidades (ej. "100 unidades"), costos, etc.
-    2.  **Identifica Tendencias:** Resume los puntos de dolor principales y las opiniones positivas más repetidas.
-    3.  **Formato:** Usa un lenguaje formal de negocios. Utiliza viñetas claras y subtítulos en negrita para organizar la información.
+    1.  **Extrae Datos Duros:** Identifica y lista cualquier cifra mencionada: precios, cantidades, costos, etc.
+    2.  **Identifica Tendencias:** Resume los puntos de dolor principales y las opiniones positivas.
+    3.  **Formato:** Usa un lenguaje formal de negocios. Utiliza viñetas claras y subtítulos en negrita.
 
     Transcripción:
-    {texto}
+    {texto_seguro}
     """
     
     try:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2 # Temperatura baja para ser más preciso y menos creativo
+            temperature=0.2
         )
-        return response.choices[0].message.content
+        # Devolvemos el resumen de la IA + nuestro aviso personalizado
+        return response.choices[0].message.content + aviso_limite
     except Exception as e:
         return f"Error al generar resumen ejecutivo: {str(e)}"
 
