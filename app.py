@@ -2,15 +2,17 @@ import os
 import re
 import uuid
 import io
+import time
+import threading
+import subprocess
+import imageio_ffmpeg
 from flask import Flask, render_template, request, jsonify, send_file
 from openai import OpenAI
 import pandas as pd
 from docx import Document
-from docx.shared import Pt
 
 app = Flask(__name__)
 
-# Configuración del cliente Groq
 client = OpenAI(
     api_key=os.environ.get("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
@@ -19,42 +21,30 @@ client = OpenAI(
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Memoria temporal para guardar el último resultado y poder descargarlo
-# (En un sistema real con usuarios, usaríamos una base de datos o redis)
+# Memoria para tareas en segundo plano
+TAREAS = {}
 RESULTS_CACHE = {}
 
 MARKET_KEYWORDS = {
     "Precio/Costos": ["precio", "costo", "caro", "barato", "oferta", "pago", "dinero", "soles", "dólares", "inversión"],
-    "Calidad/Producto": ["calidad", "bueno", "malo", "excelente", "falla", "material", "duradero", "acabado"],
-    "Servicio/Atención": ["atención", "servicio", "soporte", "ayuda", "rápido", "lento", "amable", "queja"],
-    "Cantidad/Ventas": ["cantidad", "vendido", "unidades", "stock", "total", "volumen", "pedido"]
+    "Calidad/Producto": ["calidad", "bueno", "malo", "excelente", "falla", "material", "duradero"],
+    "Servicio/Atención": ["atención", "servicio", "soporte", "ayuda", "rápido", "lento", "queja"],
+    "Cantidad/Ventas": ["cantidad", "vendido", "unidades", "stock", "total", "volumen"]
 }
 
+def obtener_ffmpeg():
+    """Obtiene la ruta del ejecutable de FFmpeg instalado vía pip"""
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
 def generar_resumen_ia(texto):
-    if not texto.strip():
-        return "No hay texto suficiente para generar un resumen."
+    if not texto.strip(): return "No hay texto suficiente."
     
-    # --- DEFENSA CONTRA LÍMITES DE LA API GRATUITA ---
-    # Un token son aprox 4 caracteres. 6000 tokens = ~24,000 caracteres.
-    # Cortamos a 18,000 caracteres para dejar espacio seguro para la respuesta de la IA.
+    # Truncado Defensivo (Límite de Llama 3)
     limite_caracteres = 18000
     texto_seguro = texto[:limite_caracteres]
+    aviso = "\n\n⚠️ NOTA DE HELIOS: Debido a la longitud extrema, este resumen ejecutivo se generó analizando la primera parte de la reunión para respetar los límites de la IA. Tus archivos descargables contienen la transcripción completa." if len(texto) > limite_caracteres else ""
     
-    aviso_limite = ""
-    if len(texto) > limite_caracteres:
-         aviso_limite = "\n\n⚠️ NOTA DE HELIOS: Debido a la longitud extrema de la reunión y a los límites de la capa gratuita de IA, este resumen ejecutivo se generó analizando únicamente la primera parte de la conversación. Sin embargo, tus archivos descargables contienen la transcripción completa."
-    
-    prompt = f"""
-    Actúa como un consultor de negocios senior. Analiza la siguiente transcripción de audios de un estudio de mercado.
-    
-    Tu tarea es generar un RESUMEN EJECUTIVO PROFESIONAL.
-    1.  **Extrae Datos Duros:** Identifica y lista cualquier cifra mencionada: precios, cantidades, costos, etc.
-    2.  **Identifica Tendencias:** Resume los puntos de dolor principales y las opiniones positivas.
-    3.  **Formato:** Usa un lenguaje formal de negocios. Utiliza viñetas claras y subtítulos en negrita.
-
-    Transcripción:
-    {texto_seguro}
-    """
+    prompt = f"""Actúa como consultor senior. Haz un RESUMEN EJECUTIVO identificando Datos Duros (precios, costos) y Tendencias. Usa viñetas formales.\n\nTranscripción:\n{texto_seguro}"""
     
     try:
         response = client.chat.completions.create(
@@ -62,137 +52,173 @@ def generar_resumen_ia(texto):
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2
         )
-        # Devolvemos el resumen de la IA + nuestro aviso personalizado
-        return response.choices[0].message.content + aviso_limite
+        return response.choices[0].message.content + aviso
     except Exception as e:
-        return f"Error al generar resumen ejecutivo: {str(e)}"
+        return f"Error al resumir: {str(e)}"
+
+def procesar_audio_pesado(task_id, rutas_archivos):
+    """Esta función corre en segundo plano para evitar que Render corte la conexión"""
+    try:
+        TAREAS[task_id]['estado'] = 'Cortando y preparando audios (FFmpeg)...'
+        
+        carpeta_trabajo = os.path.join(UPLOAD_FOLDER, task_id)
+        os.makedirs(carpeta_trabajo, exist_ok=True)
+        
+        pedazos_totales = []
+        ffmpeg_exe = obtener_ffmpeg()
+
+        # 1. AUTOCORTE DE AUDIOS LARGOS
+        for ruta in rutas_archivos:
+            nombre_base = os.path.basename(ruta).split('.')[0]
+            # Cortar en pedazos de 15 min (900 seg) y comprimir a mp3
+            comando = [
+                ffmpeg_exe, "-i", ruta, "-f", "segment", "-segment_time", "900",
+                "-c:a", "libmp3lame", "-b:a", "64k", 
+                os.path.join(carpeta_trabajo, f"{nombre_base}_parte_%03d.mp3")
+            ]
+            subprocess.run(comando, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.remove(ruta) # Borrar el wav original pesado
+        
+        # Recoger todos los pedazos generados
+        pedazos_totales = sorted([os.path.join(carpeta_trabajo, f) for f in os.listdir(carpeta_trabajo) if f.endswith('.mp3')])
+        total_archivos = len(pedazos_totales)
+        
+        transcripciones_list = []
+        conteo_acumulado = {cat: 0 for cat in MARKET_KEYWORDS.keys()}
+
+        # 2. TRANSCRIPCIÓN CON AUTO-RETRY
+        for idx, pedazo in enumerate(pedazos_totales):
+            nombre_archivo = os.path.basename(pedazo)
+            TAREAS[task_id]['estado'] = f'Transcribiendo parte {idx+1} de {total_archivos}...'
+            
+            exito = False
+            intentos = 0
+            while not exito and intentos < 3:
+                try:
+                    with open(pedazo, "rb") as audio_file:
+                        transcription = client.audio.transcriptions.create(
+                            model="whisper-large-v3", file=audio_file, language="es"
+                        )
+                    texto_final = transcription.text
+                    transcripciones_list.append({"archivo": nombre_archivo, "texto": texto_final})
+                    
+                    texto_limpio = re.sub(r'[^\w\s]', '', texto_final.lower())
+                    for cat, sin in MARKET_KEYWORDS.items():
+                        for pal in sin:
+                            conteo_acumulado[cat] += len(re.findall(r'\b' + re.escape(pal) + r'\b', texto_limpio))
+                    exito = True
+                    
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str and "rate_limit_exceeded" in error_str:
+                        # Extraer el tiempo de espera del mensaje de Groq
+                        match = re.search(r'try again in (?:(\d+)m)?(?:([0-9.]+)s)', error_str)
+                        if match:
+                            mins = int(match.group(1)) if match.group(1) else 0
+                            secs = float(match.group(2)) if match.group(2) else 0
+                            espera = (mins * 60) + secs + 5 # 5 segundos extra de margen
+                            TAREAS[task_id]['estado'] = f'Límite de Groq alcanzado. Helios pausado automáticamente por {int(espera)} segundos...'
+                            time.sleep(espera)
+                        else:
+                            time.sleep(60) # Fallback
+                        intentos += 1
+                    else:
+                        raise e # Si es otro error, que falle
+                        
+            # Limpiar pedazo
+            os.remove(pedazo)
+
+        # 3. RESUMEN FINAL
+        TAREAS[task_id]['estado'] = 'Generando Resumen Ejecutivo (Llama 3)...'
+        texto_unido = "\n\n".join([f"--- {t['archivo']} ---\n{t['texto']}" for t in transcripciones_list])
+        resumen_inteligente = generar_resumen_ia(texto_unido)
+
+        total_menciones = sum(conteo_acumulado.values())
+        porcentajes = {cat: (round((val / total_menciones) * 100, 1) if total_menciones > 0 else 0) for cat, val in conteo_acumulado.items()}
+
+        RESULTS_CACHE[task_id] = {
+            "resumen": resumen_inteligente, "transcripciones": transcripciones_list,
+            "conteo": conteo_acumulado, "porcentajes": porcentajes
+        }
+        
+        TAREAS[task_id]['completado'] = True
+        TAREAS[task_id]['estado'] = '¡Análisis Completado!'
+        
+    except Exception as e:
+        TAREAS[task_id]['error'] = str(e)
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/analizar', methods=['POST'])
-def analizar_multiples():
+def analizar_async():
     archivos = request.files.getlist('audios')
     if not archivos or archivos[0].filename == '':
         return jsonify({"error": "No seleccionaste archivos"}), 400
     
-    transcripciones_list = []
-    conteo_acumulado = {cat: 0 for cat in MARKET_KEYWORDS.keys()}
-
-    for archivo in archivos:
-        ruta_archivo = os.path.join(UPLOAD_FOLDER, archivo.filename)
-        archivo.save(ruta_archivo)
-        
-        try:
-            with open(ruta_archivo, "rb") as audio_file:
-                transcription = client.audio.transcriptions.create(
-                    model="whisper-large-v3", 
-                    file=audio_file,
-                    language="es"
-                )
-            
-            texto_final = transcription.text
-            transcripciones_list.append({"archivo": archivo.filename, "texto": texto_final})
-            
-            texto_limpio = re.sub(r'[^\w\s]', '', texto_final.lower())
-            for categoria, sinonimos in MARKET_KEYWORDS.items():
-                for palabra in sinonimos:
-                    patron = r'\b' + re.escape(palabra) + r'\b'
-                    conteo_acumulado[categoria] += len(re.findall(patron, texto_limpio))
-        except Exception as e:
-             return jsonify({"error": f"Error en {archivo.filename}: {str(e)}"}), 500
-        finally:
-            if os.path.exists(ruta_archivo):
-                os.remove(ruta_archivo)
-
-    texto_unido_para_resumen = "\n\n".join([f"--- {t['archivo']} ---\n{t['texto']}" for t in transcripciones_list])
-    resumen_inteligente = generar_resumen_ia(texto_unido_para_resumen)
-
-    total_menciones = sum(conteo_acumulado.values())
-    porcentajes = {cat: (round((val / total_menciones) * 100, 1) if total_menciones > 0 else 0) 
-                  for cat, val in conteo_acumulado.items()}
-
-    # Generar un ID único para este análisis
-    analysis_id = str(uuid.uuid4())
+    task_id = str(uuid.uuid4())
+    TAREAS[task_id] = {'completado': False, 'estado': 'Iniciando carga...', 'error': None}
     
-    # Guardar los datos en la caché temporal para poder descargarlos luego
-    RESULTS_CACHE[analysis_id] = {
-        "resumen": resumen_inteligente,
-        "transcripciones": transcripciones_list,
-        "conteo": conteo_acumulado,
-        "porcentajes": porcentajes,
-        "total_menciones": total_menciones
-    }
+    rutas_guardadas = []
+    for archivo in archivos:
+        ruta = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{archivo.filename}")
+        archivo.save(ruta)
+        rutas_guardadas.append(ruta)
+    
+    # Iniciar el trabajo en segundo plano
+    thread = threading.Thread(target=procesar_audio_pesado, args=(task_id, rutas_guardadas))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"task_id": task_id})
 
-    return jsonify({
-        "analysis_id": analysis_id, # Devolvemos el ID al frontend
-        "resumen": resumen_inteligente,
-        "porcentajes": porcentajes
-    })
+@app.route('/status/<task_id>')
+def status(task_id):
+    tarea = TAREAS.get(task_id)
+    if not tarea: return jsonify({"error": "Tarea no encontrada"}), 404
+    
+    if tarea.get('error'): return jsonify({"error": tarea['error']})
+    if not tarea['completado']: return jsonify({"completado": False, "estado": tarea['estado']})
+    
+    datos = RESULTS_CACHE[task_id]
+    return jsonify({"completado": True, "analysis_id": task_id, "resumen": datos['resumen'], "porcentajes": datos['porcentajes']})
 
-# --- RUTAS DE DESCARGA ---
-
+# --- RUTAS DE DESCARGA IGUAL QUE ANTES ---
 @app.route('/download/word/<analysis_id>')
 def download_word(analysis_id):
     data = RESULTS_CACHE.get(analysis_id)
-    if not data: return "Datos no encontrados o expirados.", 404
-
+    if not data: return "Datos expirados.", 404
     document = Document()
-    document.add_heading('Reporte de Análisis de Mercado (IA)', 0)
-
+    document.add_heading('Reporte de Análisis HELIOS', 0)
     document.add_heading('1. Resumen Ejecutivo', level=1)
     document.add_paragraph(data['resumen'])
-
-    document.add_heading('2. Análisis de Tendencias (Frecuencia)', level=1)
-    table = document.add_table(rows=1, cols=3)
-    hdr_cells = table.rows[0].cells
-    hdr_cells[0].text = 'Categoría'
-    hdr_cells[1].text = 'Menciones'
-    hdr_cells[2].text = 'Participación (%)'
-    
+    document.add_heading('2. Métricas', level=1)
     for cat, count in data['conteo'].items():
-        row_cells = table.add_row().cells
-        row_cells[0].text = cat
-        row_cells[1].text = str(count)
-        row_cells[2].text = f"{data['porcentajes'][cat]}%"
-
-    document.add_heading('3. Transcripciones Detalladas', level=1)
+        document.add_paragraph(f"{cat}: {count} menciones ({data['porcentajes'][cat]}%)")
+    document.add_heading('3. Transcripciones', level=1)
     for item in data['transcripciones']:
-        p = document.add_paragraph()
-        run = p.add_run(f"Archivo: {item['archivo']}")
-        run.bold = True
+        document.add_paragraph(f"Archivo: {item['archivo']}").bold = True
         document.add_paragraph(item['texto'])
-        document.add_paragraph("-" * 20)
-
-    # Guardar en memoria y enviar
     f = io.BytesIO()
     document.save(f)
     f.seek(0)
-    return send_file(f, as_attachment=True, download_name=f'Reporte_Mercado_{analysis_id[:8]}.docx')
+    return send_file(f, as_attachment=True, download_name=f'Reporte_Helios_{analysis_id[:8]}.docx')
 
 @app.route('/download/excel/<analysis_id>')
 def download_excel(analysis_id):
     data = RESULTS_CACHE.get(analysis_id)
-    if not data: return "Datos no encontrados o expirados.", 404
-
-    # Crear DataFrames de Pandas
-    df_resumen = pd.DataFrame({"Resumen Ejecutivo": [data['resumen']]})
-    
+    if not data: return "Datos expirados.", 404
+    df_resumen = pd.DataFrame({"Resumen": [data['resumen']]})
     df_metricas = pd.DataFrame(list(data['conteo'].items()), columns=['Categoría', 'Menciones'])
-    df_metricas['Porcentaje'] = df_metricas['Categoría'].map(data['porcentajes'])
-
-    df_transcripciones = pd.DataFrame(data['transcripciones'])
-
-    # Guardar en memoria usando ExcelWriter
+    df_trans = pd.DataFrame(data['transcripciones'])
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_metricas.to_excel(writer, sheet_name='Métricas', index=False)
         df_resumen.to_excel(writer, sheet_name='Resumen', index=False)
-        df_transcripciones.to_excel(writer, sheet_name='Transcripciones', index=False)
-
+        df_trans.to_excel(writer, sheet_name='Textos', index=False)
     output.seek(0)
-    return send_file(output, as_attachment=True, download_name=f'Data_Mercado_{analysis_id[:8]}.xlsx', mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    return send_file(output, as_attachment=True, download_name=f'Data_Helios_{analysis_id[:8]}.xlsx')
 
 if __name__ == '__main__':
     app.run(debug=True)
